@@ -39,6 +39,18 @@ ansible-playbook playbooks/remediate.yml \
   -e '{"target_clusters": ["closet-a01-cluster"]}'
 ```
 
+## Tests
+
+```bash
+python3 -m venv .venv && .venv/bin/python3 -m pip install -r requirements-dev-lock.txt
+PATH="$PWD/.venv/bin:$PATH" .venv/bin/python3 -m unittest discover -s tests
+```
+
+The tests run the playbook against `tests/fake_sim_api.py` (stdlib) on ansible-core 2.16, the
+version in AAP 2.5-2.7 execution environments. They check each host gets the right action, the
+no-op and missing-input cases, and that the token never appears in the output, at default
+verbosity and at `-vvv`.
+
 ## License
 
 Apache-2.0

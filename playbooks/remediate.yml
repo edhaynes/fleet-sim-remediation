@@ -82,20 +82,27 @@
       register: requested
       no_log: true   # the request carries the token
 
+    # The registered request results include the request itself (its Authorization header):
+    # keep only the action records, and never loop over or print `requested` (2026-10-21).
+    - name: Keep only the action records
+      ansible.builtin.set_fact:
+        fleetsim_actions: "{{ requested.results | default([]) | map(attribute='json') | list }}"
+      no_log: true
+
     - name: Show the requested actions
       ansible.builtin.debug:
-        msg: "{{ item.json.id }}: {{ item.json.action }} {{ item.json.target_id }} ({{ item.json.state }})"
-      loop: "{{ requested.results | default([]) }}"
+        msg: "{{ item.id }}: {{ item.action }} {{ item.target_id }} ({{ item.state }})"
+      loop: "{{ fleetsim_actions }}"
       loop_control:
-        label: "{{ item.json.id }}"
+        label: "{{ item.id }}"
 
     - name: Wait for each repair to finish
       ansible.builtin.uri:
-        url: "{{ fleetsim_api_url }}/v1/actions/{{ item.json.id }}"
+        url: "{{ fleetsim_api_url }}/v1/actions/{{ item.id }}"
         validate_certs: "{{ fleetsim_validate_certs }}"
-      loop: "{{ requested.results | default([]) }}"
+      loop: "{{ fleetsim_actions }}"
       loop_control:
-        label: "{{ item.json.id }} {{ item.json.target_id }}"
+        label: "{{ item.id }} {{ item.target_id }}"
       register: finished
       until: finished.json.state != 'running'
       retries: "{{ (fleetsim_action_timeout_seconds | int / 2) | int }}"
@@ -103,9 +110,9 @@
 
     - name: Check every repair succeeded
       ansible.builtin.assert:
-        that: item.json.state == 'succeeded'
-        fail_msg: "{{ item.json.target_id }}: {{ item.json.state }} - {{ item.json.message }}"
-        success_msg: "{{ item.json.target_id }}: {{ item.json.message }}"
-      loop: "{{ finished.results | default([]) }}"
+        that: item.state == 'succeeded'
+        fail_msg: "{{ item.target_id }}: {{ item.state }} - {{ item.message }}"
+        success_msg: "{{ item.target_id }}: {{ item.message }}"
+      loop: "{{ finished.results | default([]) | map(attribute='json') | list }}"
       loop_control:
-        label: "{{ item.json.target_id }}"
+        label: "{{ item.target_id }}"

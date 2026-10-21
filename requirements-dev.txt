@@ -1,0 +1,3 @@
+# Tests run on the ansible-core in AAP 2.5-2.7 execution environments (2.16): newer cores
+# print less, and hid a token leak that 2.16 shows (2026-10-21).
+ansible-core>=2.16,<2.17
