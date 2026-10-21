@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.retry
+.env
+.env.*
+*.pem
+*.key

@@ -1,0 +1,111 @@
+---
+# Repair simulated hosts that a policy found not ready, through the fleet-sim Sim API v1.
+# Designed to be launched by Red Hat ACM PolicyAutomation (which passes target_clusters), or by
+# hand. Everything it touches is simulated; it changes no real systems.
+#
+# Variables:
+#   fleetsim_api_url      Sim API base URL (required)
+#   fleetsim_api_token    bearer token for writes (required; supply it as an AAP credential)
+#   target_clusters       cluster ids to repair (ACM passes the violating clusters)
+#   fleetsim_action_timeout_seconds   how long to wait for each repair (default 300)
+#   fleetsim_validate_certs           verify TLS (default true)
+- name: Repair simulated hosts that are not ready
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    target_clusters: []
+    fleetsim_action_timeout_seconds: 300
+    fleetsim_validate_certs: true
+    fleetsim_requested_by: "AAP job {{ awx_job_id | default(tower_job_id | default('local run')) }}"
+    fleetsim_reason: "policy {{ policy_name | default('unknown') }} reported the cluster non-compliant"
+  tasks:
+    - name: Check the inputs
+      ansible.builtin.assert:
+        that:
+          - fleetsim_api_url is defined and fleetsim_api_url | length > 0
+          - fleetsim_api_token is defined and fleetsim_api_token | length > 0
+          - target_clusters | length > 0
+        fail_msg: "Set fleetsim_api_url, fleetsim_api_token (credential) and target_clusters."
+        quiet: true
+
+    - name: Read which repair actions the simulator offers
+      ansible.builtin.uri:
+        url: "{{ fleetsim_api_url }}/v1/simulator"
+        validate_certs: "{{ fleetsim_validate_certs }}"
+      register: simulator
+
+    - name: List the hosts of each target cluster
+      ansible.builtin.uri:
+        url: "{{ fleetsim_api_url }}/v1/hosts?cluster={{ item | urlencode }}"
+        validate_certs: "{{ fleetsim_validate_certs }}"
+      loop: "{{ target_clusters }}"
+      register: cluster_hosts
+
+    - name: Pick the hosts that are not ready, and an action that applies to each
+      ansible.builtin.set_fact:
+        repairs: >-
+          {{ repairs | default([]) + [{'host': host.id, 'status': host.status,
+              'action': (simulator.json.actions | selectattr('applies_to', 'contains', host.status)
+                         | map(attribute='id') | first | default(''))}] }}
+      loop: "{{ cluster_hosts.results | map(attribute='json') | flatten | rejectattr('ready') | list }}"
+      loop_control:
+        loop_var: host
+        label: "{{ host.id }} ({{ host.status }})"
+
+    - name: Report what will be repaired
+      ansible.builtin.debug:
+        msg: "{{ repairs | default([]) | map(attribute='host') | list or 'nothing to repair: every host is ready' }}"
+
+    - name: Fail on hosts with no applicable action
+      ansible.builtin.fail:
+        msg: "No action applies to {{ item.host }} ({{ item.status }})"
+      loop: "{{ repairs | default([]) | selectattr('action', 'equalto', '') | list }}"
+
+    - name: Request the repairs
+      ansible.builtin.uri:
+        url: "{{ fleetsim_api_url }}/v1/actions"
+        method: POST
+        status_code: 202
+        body_format: json
+        body:
+          target_id: "{{ item.host }}"
+          action: "{{ item.action }}"
+          reason: "{{ fleetsim_reason }}"
+          requested_by: "{{ fleetsim_requested_by }}"
+        headers:
+          Authorization: "Bearer {{ fleetsim_api_token }}"
+        validate_certs: "{{ fleetsim_validate_certs }}"
+      loop: "{{ repairs | default([]) }}"
+      loop_control:
+        label: "{{ item.action }} {{ item.host }}"
+      register: requested
+      no_log: true   # the request carries the token
+
+    - name: Show the requested actions
+      ansible.builtin.debug:
+        msg: "{{ item.json.id }}: {{ item.json.action }} {{ item.json.target_id }} ({{ item.json.state }})"
+      loop: "{{ requested.results | default([]) }}"
+      loop_control:
+        label: "{{ item.json.id }}"
+
+    - name: Wait for each repair to finish
+      ansible.builtin.uri:
+        url: "{{ fleetsim_api_url }}/v1/actions/{{ item.json.id }}"
+        validate_certs: "{{ fleetsim_validate_certs }}"
+      loop: "{{ requested.results | default([]) }}"
+      loop_control:
+        label: "{{ item.json.id }} {{ item.json.target_id }}"
+      register: finished
+      until: finished.json.state != 'running'
+      retries: "{{ (fleetsim_action_timeout_seconds | int / 2) | int }}"
+      delay: 2
+
+    - name: Check every repair succeeded
+      ansible.builtin.assert:
+        that: item.json.state == 'succeeded'
+        fail_msg: "{{ item.json.target_id }}: {{ item.json.state }} - {{ item.json.message }}"
+        success_msg: "{{ item.json.target_id }}: {{ item.json.message }}"
+      loop: "{{ finished.results | default([]) }}"
+      loop_control:
+        label: "{{ item.json.target_id }}"
