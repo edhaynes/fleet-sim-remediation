@@ -1,6 +1,6 @@
 # fleet-sim-remediation
 
-A generic Ansible playbook that repairs **simulated** hosts through a fleet-sim Sim API (v1).
+Generic Ansible playbooks that repair **simulated** hosts through a fleet-sim Sim API (v1).
 It's the AAP half of a closed-loop demo: Red Hat Advanced Cluster Management detects a
 non-compliant cluster, its `PolicyAutomation` launches this playbook as an Ansible Automation
 Platform job, and the playbook asks the simulator to repair the hosts that aren't ready.
@@ -10,10 +10,27 @@ credentials: you supply those when you run it.
 
 ## What it does
 
+`playbooks/remediate.yml`, the runbook ACM launches:
+
 1. Reads the simulator's repair actions (`GET /v1/simulator`).
 2. Lists the hosts of each cluster in `target_clusters` and keeps the ones not ready.
-3. For each, requests the action that applies to its status (`POST /v1/actions`, with the token).
-4. Waits for every action to finish and fails if one didn't succeed.
+3. With `fleetsim_remediation: runbook` (the default): for each host, requests the action that
+   applies to its status (`POST /v1/actions`, with the token), one host at a time, waits for it
+   and fails if it didn't succeed.
+4. With `fleetsim_remediation: ai`: repairs nothing; posts each cluster's incident to a fleet-sim
+   AI advisor (`POST {fleetsim_advisor_url}/v1/incidents`, same token), which suggests one of the
+   playbooks below for a person to approve.
+
+The single-action playbooks, which an AI advisor may suggest (each runs one Sim API action on
+`target_host`, and refuses a host that is already ready):
+
+| Playbook | Sim API action |
+|---|---|
+| `playbooks/restart_host.yml` | `restart` |
+| `playbooks/reconnect_host.yml` | `reconnect` |
+| `playbooks/reapply_config.yml` | `reapply_config` |
+
+All of them call the Sim API through one role, `playbooks/roles/sim_action`.
 
 ## Variables
 
@@ -21,7 +38,10 @@ credentials: you supply those when you run it.
 |---|---|---|---|
 | `fleetsim_api_url` | yes | — | Sim API base URL |
 | `fleetsim_api_token` | yes | — | bearer token for writes; supply it as an AAP credential |
-| `target_clusters` | yes | `[]` | cluster ids; ACM PolicyAutomation passes the violating clusters |
+| `target_clusters` | `remediate.yml` | `[]` | cluster ids; ACM PolicyAutomation passes the violating clusters |
+| `target_host` | single-action playbooks | — | the host to act on |
+| `fleetsim_remediation` | no | `runbook` | `runbook` or `ai` (`remediate.yml`) |
+| `fleetsim_advisor_url` | for `ai` | — | the AI advisor's base URL |
 | `fleetsim_action_timeout_seconds` | no | `300` | how long to wait for each repair |
 | `fleetsim_validate_certs` | no | `true` | verify TLS |
 
@@ -46,10 +66,11 @@ python3 -m venv .venv && .venv/bin/python3 -m pip install -r requirements-dev-lo
 PATH="$PWD/.venv/bin:$PATH" .venv/bin/python3 -m unittest discover -s tests
 ```
 
-The tests run the playbook against `tests/fake_sim_api.py` (stdlib) on ansible-core 2.16, the
-version in AAP 2.5-2.7 execution environments. They check each host gets the right action, the
-no-op and missing-input cases, and that the token never appears in the output, at default
-verbosity and at `-vvv`.
+The tests run the playbooks against `tests/fake_sim_api.py` (stdlib; it also stands in for the
+advisor) on ansible-core 2.16, the version in AAP 2.5-2.7 execution environments. They check each
+host gets the right action, the AI hand-off repairs nothing, an action the simulator refuses fails
+the job, the no-op and missing-input cases, and that the token never appears in the output, at
+default verbosity and at `-vvv`, for every playbook.
 
 ## License
 

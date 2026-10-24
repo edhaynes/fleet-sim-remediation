@@ -7,6 +7,10 @@
 #   fleetsim_api_url      Sim API base URL (required)
 #   fleetsim_api_token    bearer token for writes (required; supply it as an AAP credential)
 #   target_clusters       cluster ids to repair (ACM passes the violating clusters)
+#   fleetsim_remediation  runbook (default): repair each host with the action that fits its status;
+#                         ai: hand each cluster's incident to a fleet-sim AI advisor, which suggests
+#                         a playbook for a person to approve; nothing is repaired here
+#   fleetsim_advisor_url  the advisor's base URL (required for ai; it accepts the same token)
 #   fleetsim_action_timeout_seconds   how long to wait for each repair (default 300)
 #   fleetsim_validate_certs           verify TLS (default true)
 - name: Repair simulated hosts that are not ready
@@ -15,6 +19,7 @@
   gather_facts: false
   vars:
     target_clusters: []
+    fleetsim_remediation: runbook
     fleetsim_action_timeout_seconds: 300
     fleetsim_validate_certs: true
     fleetsim_requested_by: "AAP job {{ awx_job_id | default(tower_job_id | default('local run')) }}"
@@ -26,7 +31,11 @@
           - fleetsim_api_url is defined and fleetsim_api_url | length > 0
           - fleetsim_api_token is defined and fleetsim_api_token | length > 0
           - target_clusters | length > 0
-        fail_msg: "Set fleetsim_api_url, fleetsim_api_token (credential) and target_clusters."
+          - fleetsim_remediation in ['runbook', 'ai']
+          - fleetsim_remediation != 'ai' or (fleetsim_advisor_url | default('') | length > 0)
+        fail_msg: >-
+          Set fleetsim_api_url, fleetsim_api_token (credential) and target_clusters;
+          fleetsim_remediation is runbook or ai, and ai needs fleetsim_advisor_url.
         quiet: true
 
     - name: Read which repair actions the simulator offers
@@ -57,62 +66,57 @@
       ansible.builtin.debug:
         msg: "{{ repairs | default([]) | map(attribute='host') | list or 'nothing to repair: every host is ready' }}"
 
-    - name: Fail on hosts with no applicable action
-      ansible.builtin.fail:
-        msg: "No action applies to {{ item.host }} ({{ item.status }})"
-      loop: "{{ repairs | default([]) | selectattr('action', 'equalto', '') | list }}"
+    - name: Hand each incident to the AI advisor
+      when: fleetsim_remediation == 'ai'
+      block:
+        - name: Post the incident
+          ansible.builtin.uri:
+            url: "{{ fleetsim_advisor_url }}/v1/incidents"
+            method: POST
+            status_code: 202
+            body_format: json
+            body:
+              cluster: "{{ item.item }}"
+              hosts: "{{ item.json | rejectattr('ready') | map(attribute='id') | list }}"
+              policy: "{{ policy_name | default('') }}"
+              aap_job_id: "{{ awx_job_id | default(tower_job_id | default('')) | string }}"
+            headers:
+              Authorization: "Bearer {{ fleetsim_api_token }}"
+            validate_certs: "{{ fleetsim_validate_certs }}"
+          loop: "{{ cluster_hosts.results }}"
+          loop_control:
+            label: "{{ item.item }}"
+          when: item.json | rejectattr('ready') | list | length > 0
+          register: incidents
+          no_log: true   # the request carries the token
 
-    - name: Request the repairs
-      ansible.builtin.uri:
-        url: "{{ fleetsim_api_url }}/v1/actions"
-        method: POST
-        status_code: 202
-        body_format: json
-        body:
-          target_id: "{{ item.host }}"
-          action: "{{ item.action }}"
-          reason: "{{ fleetsim_reason }}"
-          requested_by: "{{ fleetsim_requested_by }}"
-        headers:
-          Authorization: "Bearer {{ fleetsim_api_token }}"
-        validate_certs: "{{ fleetsim_validate_certs }}"
-      loop: "{{ repairs | default([]) }}"
-      loop_control:
-        label: "{{ item.action }} {{ item.host }}"
-      register: requested
-      no_log: true   # the request carries the token
+        # As with the repairs: keep only the advisor's replies, never the registered requests.
+        - name: Keep only the advisor's replies
+          ansible.builtin.set_fact:
+            fleetsim_proposals: "{{ incidents.results | default([]) | selectattr('json', 'defined') | map(attribute='json') | list }}"
+          no_log: true
 
-    # The registered request results include the request itself (its Authorization header):
-    # keep only the action records, and never loop over or print `requested` (2026-10-21).
-    - name: Keep only the action records
-      ansible.builtin.set_fact:
-        fleetsim_actions: "{{ requested.results | default([]) | map(attribute='json') | list }}"
-      no_log: true
+        - name: Report the hand-off
+          ansible.builtin.debug:
+            msg: "handed to the AI advisor: {{ item.cluster }}, proposal {{ item.proposal }}"
+          loop: "{{ fleetsim_proposals }}"
+          loop_control:
+            label: "{{ item.cluster }}"
 
-    - name: Show the requested actions
-      ansible.builtin.debug:
-        msg: "{{ item.id }}: {{ item.action }} {{ item.target_id }} ({{ item.state }})"
-      loop: "{{ fleetsim_actions }}"
-      loop_control:
-        label: "{{ item.id }}"
+    - name: Repair by the runbook
+      when: fleetsim_remediation == 'runbook'
+      block:
+        - name: Fail on hosts with no applicable action
+          ansible.builtin.fail:
+            msg: "No action applies to {{ item.host }} ({{ item.status }})"
+          loop: "{{ repairs | default([]) | selectattr('action', 'equalto', '') | list }}"
 
-    - name: Wait for each repair to finish
-      ansible.builtin.uri:
-        url: "{{ fleetsim_api_url }}/v1/actions/{{ item.id }}"
-        validate_certs: "{{ fleetsim_validate_certs }}"
-      loop: "{{ fleetsim_actions }}"
-      loop_control:
-        label: "{{ item.id }} {{ item.target_id }}"
-      register: finished
-      until: finished.json.state != 'running'
-      retries: "{{ (fleetsim_action_timeout_seconds | int / 2) | int }}"
-      delay: 2
-
-    - name: Check every repair succeeded
-      ansible.builtin.assert:
-        that: item.state == 'succeeded'
-        fail_msg: "{{ item.target_id }}: {{ item.state }} - {{ item.message }}"
-        success_msg: "{{ item.target_id }}: {{ item.message }}"
-      loop: "{{ finished.results | default([]) | map(attribute='json') | list }}"
-      loop_control:
-        label: "{{ item.target_id }}"
+        - name: Repair each host
+          ansible.builtin.include_role:
+            name: sim_action
+          vars:
+            sim_action: "{{ item.action }}"
+            sim_action_target: "{{ item.host }}"
+          loop: "{{ repairs | default([]) }}"
+          loop_control:
+            label: "{{ item.action }} {{ item.host }}"

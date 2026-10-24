@@ -1,0 +1,43 @@
+---
+- name: "Request {{ sim_action }} on {{ sim_action_target }}"
+  ansible.builtin.uri:
+    url: "{{ fleetsim_api_url }}/v1/actions"
+    method: POST
+    status_code: 202
+    body_format: json
+    body:
+      target_id: "{{ sim_action_target }}"
+      action: "{{ sim_action }}"
+      reason: "{{ sim_action_reason }}"
+      requested_by: "{{ sim_action_requested_by }}"
+    headers:
+      Authorization: "Bearer {{ fleetsim_api_token }}"
+    validate_certs: "{{ sim_action_validate_certs }}"
+  register: sim_action_request
+  no_log: true   # the request carries the token
+
+# The registered result includes the request itself (its Authorization header): keep only the
+# action record, and never print or loop over sim_action_request (2026-10-21).
+- name: Keep only the action record
+  ansible.builtin.set_fact:
+    sim_action_record: "{{ sim_action_request.json }}"
+  no_log: true
+
+- name: Show the requested action
+  ansible.builtin.debug:
+    msg: "{{ sim_action_record.id }}: {{ sim_action_record.action }} {{ sim_action_record.target_id }} ({{ sim_action_record.state }})"
+
+- name: "Wait for {{ sim_action }} on {{ sim_action_target }} to finish"
+  ansible.builtin.uri:
+    url: "{{ fleetsim_api_url }}/v1/actions/{{ sim_action_record.id }}"
+    validate_certs: "{{ sim_action_validate_certs }}"
+  register: sim_action_done
+  until: sim_action_done.json.state != 'running'
+  retries: "{{ (sim_action_timeout_seconds | int / 2) | int }}"
+  delay: 2
+
+- name: Check the action succeeded
+  ansible.builtin.assert:
+    that: sim_action_done.json.state == 'succeeded'
+    fail_msg: "{{ sim_action_target }}: {{ sim_action_done.json.state }} - {{ sim_action_done.json.message }}"
+    success_msg: "{{ sim_action_target }}: {{ sim_action_done.json.message }}"

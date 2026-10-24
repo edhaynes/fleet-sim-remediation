@@ -1,0 +1,28 @@
+---
+# Shared body of the single-action playbooks: check the inputs and the target, then run the
+# action through the sim_action role. The caller sets sim_action.
+- name: Check the inputs
+  ansible.builtin.assert:
+    that:
+      - fleetsim_api_url is defined and fleetsim_api_url | length > 0
+      - fleetsim_api_token is defined and fleetsim_api_token | length > 0
+      - target_host is defined and target_host | length > 0
+    fail_msg: "Set fleetsim_api_url, fleetsim_api_token (credential) and target_host."
+    quiet: true
+
+- name: "Read {{ target_host }}"
+  ansible.builtin.uri:
+    url: "{{ fleetsim_api_url }}/v1/hosts/{{ target_host | urlencode }}"
+    validate_certs: "{{ fleetsim_validate_certs | default(true) }}"
+  register: target
+
+- name: Stop if there is nothing to repair
+  ansible.builtin.fail:
+    msg: "{{ target_host }} is {{ target.json.status }} and ready: nothing to repair"
+  when: target.json.ready
+
+- name: "Run {{ sim_action }} on {{ target_host }}"
+  ansible.builtin.include_role:
+    name: sim_action
+  vars:
+    sim_action_target: "{{ target_host }}"

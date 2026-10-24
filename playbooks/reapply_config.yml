@@ -1,0 +1,16 @@
+---
+# Re-apply a simulated host's known-good configuration, through the fleet-sim Sim API v1 action `reapply_config`. One of the playbooks an AI
+# advisor may suggest; a person approves before it runs. Everything it touches is simulated.
+#
+# Variables: fleetsim_api_url, fleetsim_api_token (credential), target_host (required);
+# fleetsim_reason, fleetsim_action_timeout_seconds (300), fleetsim_validate_certs (true).
+- name: Re-apply a simulated host's known-good configuration
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    sim_action: reapply_config
+    fleetsim_reason: "suggested by the AI advisor, approved by a person"
+  tasks:
+    - name: Check the target and run the action
+      ansible.builtin.import_tasks: tasks/single_action.yml
