@@ -12,7 +12,8 @@ import unittest
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 TOKEN = "unit-test-token-0123456789abcdef"  # pragma: allowlist secret
 PLAYBOOK = os.path.join(ROOT, "playbooks", "remediate.yml")
-SINGLE = {name: os.path.join(ROOT, "playbooks", name + ".yml") for name in ("restart_host", "reconnect_host", "reapply_config")}
+SINGLE = {name: os.path.join(ROOT, "playbooks", name + ".yml")
+          for name in ("restart_host", "reconnect_host", "reapply_config", "restore_uplink")}
 ENV = dict(os.environ, ANSIBLE_LOCALHOST_WARNING="False", ANSIBLE_INVENTORY_UNPARSED_WARNING="False",
            ANSIBLE_NOCOLOR="1")
 
@@ -100,6 +101,33 @@ class Playbook(unittest.TestCase):
             self.assertEqual(rc, 0, out)
             self.assertIn("%s %s (running)" % (action, host), out)
             self.assertIn("%s: %s is ok" % (host, host), out)
+
+    def test_runbook_never_picks_a_cluster_action(self):
+        # restore_uplink also applies to isolated hosts, and is listed first: the runbook reconnects
+        rc, out = self.run_playbook("-e", '{"target_clusters": ["c4"]}')
+        self.assertEqual(rc, 0, out)
+        self.assertIn("reconnect h5", out)
+        self.assertNotIn("restore_uplink", out)
+
+    def test_restore_uplink_on_a_cluster_names_the_approval(self):
+        rc, out = self.run_playbook("-e", "target_cluster=c4", "-e", "awx_job_id=97",
+                                    "-e", '{"fleetsim_approval": "AI proposal rp-1 approved by alice"}',
+                                    playbook=SINGLE["restore_uplink"])
+        self.assertEqual(rc, 0, out)
+        self.assertIn("restore_uplink c4 (running), requested by AAP job 97 (AI proposal rp-1 approved by alice)", out)
+        self.assertIn("c4: c4 is ok", out)
+
+    def test_restore_uplink_refuses_a_ready_missing_or_unnamed_cluster(self):
+        for extra, expected in ((["-e", "target_cluster=c2"], "nothing to repair"), (["-e", "target_cluster=nope"], "404"),
+                                ([], "target_cluster")):
+            rc, out = self.run_playbook(*extra, playbook=SINGLE["restore_uplink"])
+            self.assertNotEqual(rc, 0, out)
+            self.assertIn(expected, out)
+
+    def test_requested_by_without_an_approval(self):
+        rc, out = self.run_playbook("-e", "target_host=h1", "-e", "awx_job_id=5", playbook=SINGLE["restart_host"])
+        self.assertEqual(rc, 0, out)
+        self.assertIn("restart h1 (running), requested by AAP job 5\n", out.replace('"', "\n"))
 
     def test_single_action_refuses_a_ready_or_missing_host(self):
         rc, out = self.run_playbook("-e", "target_host=h3", playbook=SINGLE["restart_host"])

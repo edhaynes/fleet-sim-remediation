@@ -22,13 +22,18 @@ credentials: you supply those when you run it.
    playbooks below for a person to approve.
 
 The single-action playbooks, which an AI advisor may suggest (each runs one Sim API action on
-`target_host`, and refuses a host that is already ready):
+`target_host`, or on `target_cluster` for a cluster-scope action, and refuses a target that is
+already ready):
 
-| Playbook | Sim API action |
-|---|---|
-| `playbooks/restart_host.yml` | `restart` |
-| `playbooks/reconnect_host.yml` | `reconnect` |
-| `playbooks/reapply_config.yml` | `reapply_config` |
+| Playbook | Sim API action | Target |
+|---|---|---|
+| `playbooks/restart_host.yml` | `restart` | `target_host` |
+| `playbooks/reconnect_host.yml` | `reconnect` | `target_host` |
+| `playbooks/reapply_config.yml` | `reapply_config` | `target_host` |
+| `playbooks/restore_uplink.yml` | `restore_uplink` (cluster scope, Sim API 1.2.0) | `target_cluster` |
+
+The runbook (`remediate.yml`) only ever picks host actions; a cluster-scope action is left for a
+person or the AI advisor to choose.
 
 All of them call the Sim API through one role, `playbooks/roles/sim_action`.
 
@@ -39,7 +44,9 @@ All of them call the Sim API through one role, `playbooks/roles/sim_action`.
 | `fleetsim_api_url` | yes | — | Sim API base URL |
 | `fleetsim_api_token` | yes | — | bearer token for writes; supply it as an AAP credential |
 | `target_clusters` | `remediate.yml` | `[]` | cluster ids; ACM PolicyAutomation passes the violating clusters |
-| `target_host` | single-action playbooks | — | the host to act on |
+| `target_host` | host single-action playbooks | — | the host to act on |
+| `target_cluster` | `restore_uplink.yml` | — | the cluster to act on |
+| `fleetsim_approval` | no | — | added to the action's `requested_by`, e.g. "AI proposal rp-1 approved by alice" |
 | `fleetsim_remediation` | no | `runbook` | `runbook` or `ai` (`remediate.yml`) |
 | `fleetsim_advisor_url` | for `ai` | — | the AI advisor's base URL |
 | `fleetsim_action_timeout_seconds` | no | `300` | how long to wait for each repair |

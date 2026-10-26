@@ -25,7 +25,9 @@
 
 - name: Show the requested action
   ansible.builtin.debug:
-    msg: "{{ sim_action_record.id }}: {{ sim_action_record.action }} {{ sim_action_record.target_id }} ({{ sim_action_record.state }})"
+    msg: >-
+      {{ sim_action_record.id }}: {{ sim_action_record.action }} {{ sim_action_record.target_id }}
+      ({{ sim_action_record.state }}), requested by {{ sim_action_record.requested_by }}
 
 - name: "Wait for {{ sim_action }} on {{ sim_action_target }} to finish"
   ansible.builtin.uri:

@@ -1,0 +1,28 @@
+---
+# Shared body of the cluster-scope single-action playbooks: check the inputs and the target
+# cluster, then run the action on the cluster through the sim_action role. The caller sets sim_action.
+- name: Check the inputs
+  ansible.builtin.assert:
+    that:
+      - fleetsim_api_url is defined and fleetsim_api_url | length > 0
+      - fleetsim_api_token is defined and fleetsim_api_token | length > 0
+      - target_cluster is defined and target_cluster | length > 0
+    fail_msg: "Set fleetsim_api_url, fleetsim_api_token (credential) and target_cluster."
+    quiet: true
+
+- name: "Read {{ target_cluster }}"
+  ansible.builtin.uri:
+    url: "{{ fleetsim_api_url }}/v1/clusters/{{ target_cluster | urlencode }}"
+    validate_certs: "{{ fleetsim_validate_certs | default(true) }}"
+  register: target
+
+- name: Stop if there is nothing to repair
+  ansible.builtin.fail:
+    msg: "every host of {{ target_cluster }} is ready: nothing to repair"
+  when: target.json.nodes_ready == target.json.nodes | length
+
+- name: "Run {{ sim_action }} on {{ target_cluster }}"
+  ansible.builtin.include_role:
+    name: sim_action
+  vars:
+    sim_action_target: "{{ target_cluster }}"

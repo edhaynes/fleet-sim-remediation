@@ -3,7 +3,7 @@
 # advisor may suggest; a person approves before it runs. Everything it touches is simulated.
 #
 # Variables: fleetsim_api_url, fleetsim_api_token (credential), target_host (required);
-# fleetsim_reason, fleetsim_action_timeout_seconds (300), fleetsim_validate_certs (true).
+# fleetsim_reason, fleetsim_approval, fleetsim_action_timeout_seconds (300), fleetsim_validate_certs (true).
 - name: Re-apply a simulated host's known-good configuration
   hosts: localhost
   connection: local

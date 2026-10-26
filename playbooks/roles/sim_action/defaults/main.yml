@@ -2,8 +2,12 @@
 # One Sim API v1 action on one simulated host: request it, wait for it, check it succeeded.
 # Used by remediate.yml (one call per host) and by the single-action playbooks.
 #   sim_action          the Sim API action id (restart, reconnect, reapply_config, ...)
-#   sim_action_target   the host id
+#   sim_action_target   the host id, or the cluster id for a cluster-scope action
 sim_action_timeout_seconds: "{{ fleetsim_action_timeout_seconds | default(300) }}"
 sim_action_validate_certs: "{{ fleetsim_validate_certs | default(true) }}"
 sim_action_reason: "{{ fleetsim_reason | default('requested by Ansible') }}"
-sim_action_requested_by: "{{ fleetsim_requested_by | default('AAP job ' ~ (awx_job_id | default(tower_job_id | default('local run')))) }}"
+# fleetsim_approval (set by a fleet-sim AI advisor, e.g. "AI proposal rp-x approved by alice") is
+# added in brackets, so the simulator's records name the proposal and who approved it.
+sim_action_requested_by: >-
+  {{ (fleetsim_requested_by | default('AAP job ' ~ (awx_job_id | default(tower_job_id | default('local run'))))
+      ~ ((' (' ~ fleetsim_approval ~ ')') if (fleetsim_approval | default('') | length > 0) else ''))[:200] }}

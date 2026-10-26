@@ -1,0 +1,17 @@
+---
+# Restore a simulated cluster's uplink to its datacenter, through the fleet-sim Sim API v1 cluster
+# action `restore_uplink`: every host the lost uplink cut off comes back. One of the playbooks an
+# AI advisor may suggest; a person approves before it runs. Everything it touches is simulated.
+#
+# Variables: fleetsim_api_url, fleetsim_api_token (credential), target_cluster (required);
+# fleetsim_reason, fleetsim_approval, fleetsim_action_timeout_seconds (300), fleetsim_validate_certs (true).
+- name: Restore a simulated cluster's uplink
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    sim_action: restore_uplink
+    fleetsim_reason: "suggested by the AI advisor, approved by a person"
+  tasks:
+    - name: Check the target and run the action
+      ansible.builtin.import_tasks: tasks/single_cluster_action.yml

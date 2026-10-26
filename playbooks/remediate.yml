@@ -51,11 +51,20 @@
       loop: "{{ target_clusters }}"
       register: cluster_hosts
 
-    - name: Pick the hosts that are not ready, and an action that applies to each
+    # Host actions only: a cluster-scope action (Sim API 1.2.0) needs a person or the AI to choose it.
+    # By id, since a simulator before 1.2.0 sends no scope at all.
+    - name: Find the cluster-scope actions
+      ansible.builtin.set_fact:
+        cluster_actions: >-
+          {{ simulator.json.actions | selectattr('scope', 'defined') | selectattr('scope', 'equalto', 'cluster')
+             | map(attribute='id') | list }}
+
+    - name: Pick the hosts that are not ready, and a host action that applies to each
       ansible.builtin.set_fact:
         repairs: >-
           {{ repairs | default([]) + [{'host': host.id, 'status': host.status,
-              'action': (simulator.json.actions | selectattr('applies_to', 'contains', host.status)
+              'action': (simulator.json.actions | rejectattr('id', 'in', cluster_actions)
+                         | selectattr('applies_to', 'contains', host.status)
                          | map(attribute='id') | first | default(''))}] }}
       loop: "{{ cluster_hosts.results | map(attribute='json') | flatten | rejectattr('ready') | list }}"
       loop_control:
